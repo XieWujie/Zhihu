@@ -1,11 +1,9 @@
 package com.example.cache.cache;
 
 import com.example.cache.util.LOG;
+import com.example.cache.util.Pools;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class SourceFileCache implements Cache {
@@ -15,15 +13,24 @@ public class SourceFileCache implements Cache {
     private AtomicLong cacheAvailable = new AtomicLong(0);
     private final Object readLock = new Object();
     public volatile boolean sourceFinish = false;
+    private File file;
+    private static Pools.Pool<SourceFileCache> pool = new Pools.SynchronizedPool<>(10);
+
 
 
     public SourceFileCache(File file){
         try {
             readFile = new RandomAccessFile(file,"r");
             writeFile = new RandomAccessFile(file,"rw");
+            this.file = file;
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
+    }
+
+    @Override
+    public File source() {
+        return file;
     }
 
     @Override
@@ -40,8 +47,7 @@ public class SourceFileCache implements Cache {
     private void awaitSource(){
         synchronized (readLock){
             try {
-                LOG.debug("await");
-                readLock.wait(100);
+                readLock.wait();
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -50,7 +56,6 @@ public class SourceFileCache implements Cache {
 
     private void notifySourceReady(){
         synchronized (readLock){
-            LOG.debug("notify");
             readLock.notifyAll();
         }
     }
@@ -58,9 +63,24 @@ public class SourceFileCache implements Cache {
     @Override
     public void write(byte[] b,int length) throws IOException{
         writeFile.write(b,0,length);
-        if (cacheAvailable.addAndGet(length)>10*1024){
-            notifySourceReady();
+        cacheAvailable.addAndGet(length);
+        notifySourceReady();
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (writeFile != null){
+            writeFile.close();
+            writeFile = null;
         }
+        if (readFile != null){
+            readFile.close();
+            readFile = null;
+        }
+        cacheAvailable.set(0);
+        sourceFinish = false;
+        file = null;
+
     }
 
     @Override
@@ -71,8 +91,9 @@ public class SourceFileCache implements Cache {
 
     @Override
     public void seekWrite(long offset) throws IOException {
-        writeFile.seek(offset);
+        writeFile.seek(offset);;
         cacheAvailable.addAndGet(offset);
+        notifySourceReady();
     }
 
     @Override
@@ -88,5 +109,31 @@ public class SourceFileCache implements Cache {
     @Override
     public boolean isSourceFinish() {
         return sourceFinish;
+    }
+
+    public static SourceFileCache acquire(File file){
+        SourceFileCache cache = pool.acquire();
+        if (cache == null){
+            cache = new SourceFileCache(file);
+        }
+        return cache;
+    }
+
+    @Override
+    public void clearContent() {
+        FileWriter writer = null;
+        try {
+            writer = new FileWriter(file);
+            writer.write("");
+            writer.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }finally {
+            try {
+                writer.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
     }
 }

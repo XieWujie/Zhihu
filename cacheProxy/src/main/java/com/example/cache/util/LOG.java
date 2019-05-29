@@ -4,7 +4,7 @@ import android.text.TextUtils;
 import android.util.Log;
 
 public class LOG {
-    public static final String TAG = "CacheProxy";
+    public static final String TAG = "cacheProxy";
 
     public static void debug(String message){
         if (TextUtils.isEmpty(message)){

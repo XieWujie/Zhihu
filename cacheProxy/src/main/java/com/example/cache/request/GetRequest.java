@@ -1,66 +1,68 @@
 package com.example.cache.request;
 
-import android.text.TextUtils;
+import android.content.SharedPreferences;
 import com.example.cache.cache.Cache;
 import com.example.cache.source.Source;
+import com.example.cache.util.Pools;
 
-import java.io.BufferedOutputStream;
-import java.io.IOException;
 import java.net.Socket;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 
 public class GetRequest extends AbstractRequest {
 
     private static final int MIN = 1024*50;
+    private static Pools.Pool<GetRequest> pool = new Pools.SimplePool<GetRequest>(10);
 
-    public GetRequest(Socket socket, Cache cache, Source source, ExecutorService executor, boolean isFreshSource, long offset) {
-        super(socket, cache, source, executor, isFreshSource, offset);
+
+    public GetRequest(Socket socket, Cache cache, Source source, ExecutorService executor, Semaphore semaphore, SharedPreferences preferences,boolean isFreshSource, long offset) {
+        super(socket, cache, source, executor,semaphore,preferences,isFreshSource, offset);
     }
 
-
+    public void init(Socket socket, Cache cache, Source source, ExecutorService executor,Semaphore semaphore, SharedPreferences preferences,boolean isFreshSource, long offset){
+        this.socket = socket;
+        this.cache = cache;
+        this.source = source;
+        this.executor = executor;
+        this.isFreshSource = isFreshSource;
+        this.offset = offset;
+        this.semaphore = semaphore;
+        this.preferences = preferences;
+        this.editor = preferences.edit();
+    }
     public Cache getCache(){
         return cache;
     }
 
-    public void setOffset(long offset){
-        this.offset = offset;
-    }
-
-    public void setSocket(Socket socket){
-        this.socket = socket;
-    }
-
     @Override
-    void begin() throws IOException {
-        BufferedOutputStream outputStream = new BufferedOutputStream(socket.getOutputStream());
-        outputStream.write(header.getBytes("UTF-8"));
-        if (isSourceRun || sourceCompleted){
-            cacheRead(outputStream);
-            return;
-        }
-        if (contentLength - available <MIN){
+    void begin(){
+        if (onlySource){
             sourceCache();
-            cacheRead(outputStream);
             return;
         }
-        Future<Boolean> future = executor.submit(new SourceCache());
-        cacheRead(outputStream);
-        try {
-            future.get(100, TimeUnit.MILLISECONDS);
-        } catch (Exception e){
-            e.printStackTrace();
+        if (isSourceRun){
+            cacheRead();
+            return;
         }
+        if (sourceCompleted){
+            cache.isSourceFinish(true);
+            cacheRead();
+            return;
+        }
+        executor.submit(new SourceCache());
+        cacheRead();
+    }
+
+
+    public static GetRequest acquire(){
+       return pool.acquire();
     }
 
     @Override
-    public void sourceCache() throws IOException {
-        if (TextUtils.isEmpty(header)){
-            header = parse();
-        }
-        super.sourceCache();
+    public void release() {
+        super.release();
+        pool.release(this);
     }
 
     @Override
@@ -72,25 +74,9 @@ public class GetRequest extends AbstractRequest {
 
         @Override
         public Boolean call() {
-            try {
-                sourceCache();
-                return true;
-            } catch (IOException e) {
-                return false;
-            }finally {
-                try {
-                    source.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
+            sourceCache();
+            return true;
         }
-    }
-
-
-    @Override
-    public void clear() {
-
     }
 }
 

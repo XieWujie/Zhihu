@@ -6,6 +6,6 @@ import java.net.Socket;
 
 public interface RequestFactory {
 
-    Request from(Socket socket, CacheProxy proxy);
+    Request from(RequestConfig config,Socket socket, CacheProxy proxy);
 
 }

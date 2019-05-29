@@ -15,12 +15,14 @@ import com.example.administrator.zhihu.data.Ret
 import com.example.administrator.zhihu.databinding.ActivityMainBinding
 import com.example.administrator.zhihu.repository.NewsByNetRepository
 import com.example.administrator.zhihu.ui.NewViewModel
+import com.example.cache.lifecycle.AndroidLifecycleScopeProvide
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding:ActivityMainBinding
     private lateinit var model: NewViewModel
+    val provide = AndroidLifecycleScopeProvide()
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +35,8 @@ class MainActivity : AppCompatActivity() {
         })[NewViewModel::class.java]
         binding.setLifecycleOwner(this)
         event()
+        lifecycle.addObserver(provide)
+        App.cacheProxy.registerLifecycleProvide(provide)
     }
 
     private fun event(){

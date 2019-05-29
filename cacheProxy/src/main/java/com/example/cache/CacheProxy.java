@@ -1,75 +1,174 @@
 package com.example.cache;
 
 import android.content.Context;
-import androidx.lifecycle.LifecycleOwner;
+import android.content.SharedPreferences;
 import com.example.cache.cache.Cache;
 import com.example.cache.fileStrategy.FileStrategy;
 import com.example.cache.fileStrategy.SimpleFileStrategy;
-import com.example.cache.lifecycle.AndroidLifecycleListener;
-import com.example.cache.request.GetRequestFactory;
-import com.example.cache.request.Request;
-import com.example.cache.request.RequestFactory;
-import com.example.cache.request.RequestLooper;
+import com.example.cache.lifecycle.LifecycleListener;
+import com.example.cache.lifecycle.LifecycleScopeProvide;
+import com.example.cache.request.*;
 import com.example.cache.source.GetSourceFactory;
+import com.example.cache.source.SourceCallback;
 import com.example.cache.source.SourceFactory;
 import com.example.cache.util.CacheUtil;
+import com.example.cache.util.LOG;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
-public class CacheProxy implements AndroidLifecycleListener {
+public class CacheProxy implements LifecycleListener {
 
     private int port;
     private ExecutorService cacheExecutor;
+    private ExecutorService sourceExecutor;
     private Set<RequestFactory> requestFactories = new HashSet<>();
     private Set<SourceFactory> sourceFactories = new HashSet<>();
     private static final String PROXY_HOST = "127.0.0.1";
     private FileStrategy fileStrategy;
     private Cache cache;
-    private Context context;
     private ServerSocket serverSocket;
+    private int threadSize = 3;
     private static CacheProxy cacheProxy;
+    private int timeout = 10*1000;
+    private LifecycleScopeProvide lifecycleScopeProvide;
     private ConcurrentHashMap<String, Request> requests = new ConcurrentHashMap<>();
+    private RequestLooper requestLooper;
+    private boolean isFreshSource;
+    private Semaphore semaphore;
+    private Context context;
+    private SharedPreferences preferences;
 
     public CacheProxy(Context context){
-        this.context = context;
-        cacheExecutor  = Executors.newFixedThreadPool(3);
-        this.sourceFactories.add(new GetSourceFactory());
-        this.requestFactories.add(new GetRequestFactory());
-        this.fileStrategy = new SimpleFileStrategy(context,"proxyCache");
-        onCreate();
-    }
-
-    public CacheProxy(Builder builder){
-        this.context = builder.context;
-        this.cacheExecutor = builder.executor;
-        this.fileStrategy = builder.fileStrategy;
-        this.sourceFactories.add(new GetSourceFactory());
-        this.requestFactories.add(new GetRequestFactory());
-        onCreate();
-    }
-
-    private void onCreate(){
         cacheProxy = this;
+        this.context = context;
+        initial();
         start();
-        if (context instanceof LifecycleOwner){
-            LifecycleOwner owner = (LifecycleOwner)context;
-            owner.getLifecycle().addObserver(this);
+    }
+
+
+    public CacheProxy(Context context, boolean lazy){
+        this.context = context;
+        cacheProxy = this;
+        if (!lazy){
+            initial();
         }
     }
 
+    public void onlyFromFile(RequestConfig config, SourceCallback callback){
+        try {
+            semaphore.acquire();
+        } catch (InterruptedException e) {
+           throw new RuntimeException("request too fast");
+        }
+        if (requestLooper == null){
+            throw new RuntimeException("you must start proxy first");
+        }
+        if (requests.containsKey(config.getUrl())){
+            LOG.debug("return");
+            return;
+        }
+        Request request = requestLooper.fromFactory(config,null,callback);
+        sourceExecutor.execute(request);
+    }
+
+    public void registerLifecycleProvide(LifecycleScopeProvide provide){
+        this.lifecycleScopeProvide = provide;
+        provide.addObserver(this);
+    }
+
+    private void initial(){
+        requestFactories.add(new GetRequestFactory());
+        if (semaphore == null){
+            semaphore = new Semaphore(threadSize*3);
+        }
+        sourceFactories.add(new GetSourceFactory());
+        if (this.cacheExecutor == null){
+            cacheExecutor = new ThreadPoolExecutor(0,threadSize,10,TimeUnit.SECONDS,new LinkedBlockingQueue<Runnable>());
+        }
+        if (sourceExecutor == null){
+            sourceExecutor = Executors.newFixedThreadPool(threadSize);
+        }
+        if (lifecycleScopeProvide != null){
+            lifecycleScopeProvide.addObserver(this);
+        }
+        if (fileStrategy == null){
+            fileStrategy = new SimpleFileStrategy(context,"cache_proxy");
+        }
+        if (preferences == null){
+            preferences = context.getSharedPreferences("proxy",Context.MODE_PRIVATE);
+        }
+    }
+
+    public SharedPreferences getPreferences() {
+        return preferences;
+    }
+
+    public void setFileStrategy(FileStrategy fileStrategy) {
+        this.fileStrategy = fileStrategy;
+    }
+
     public static CacheProxy from(Context context){
-        if (context == cacheProxy.getContext()){
+        if (cacheProxy.context == context){
             return cacheProxy;
         }else {
             return new CacheProxy(context);
         }
+    }
+
+    public void start(){
+        try {
+            serverSocket = new ServerSocket(0,10, InetAddress.getByName(PROXY_HOST));
+            port = serverSocket.getLocalPort();
+            CountDownLatch latch = new CountDownLatch(1);
+            requestLooper = new RequestLooper(serverSocket,this,latch,sourceExecutor,requests);
+            new Thread(requestLooper).start();
+            latch.await();
+        }catch (Exception e){
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    public Semaphore getSemaphore() {
+        return semaphore;
+    }
+
+    public void setLifecycleScopeProvide(LifecycleScopeProvide lifecycleScopeProvide) {
+        this.lifecycleScopeProvide = lifecycleScopeProvide;
+    }
+
+    public boolean isFreshSource() {
+        return isFreshSource;
+    }
+
+    public void setFreshSource(boolean freshSource) {
+        isFreshSource = freshSource;
+    }
+
+    public void setTimeout(int timeout) {
+        this.timeout = timeout;
+    }
+
+    public int getThreadSize() {
+        return threadSize;
+    }
+
+    public void setThreadSize(int threadSize) {
+        this.threadSize = threadSize;
+    }
+
+    public int getPort() {
+        return port;
+    }
+
+    @Override
+    public void clear() {
+        LOG.debug("onClear");
     }
 
     public String getProxyUrl(String originUrl){
@@ -77,38 +176,14 @@ public class CacheProxy implements AndroidLifecycleListener {
     }
 
 
-    public ConcurrentHashMap<String, Request> getRequests() {
-        return requests;
-    }
-
     private String proxyUrl(String url){
-       return String.format(Locale.US, "http://%s:%d/%s", PROXY_HOST, port, CacheUtil.encode(url) );
+        return String.format(Locale.US, "http://%s:%d/%s", PROXY_HOST, port, CacheUtil.encode(url) );
     }
 
 
-    public void start(){
-        try {
-            serverSocket = new ServerSocket(0,4, InetAddress.getByName(PROXY_HOST));
-            port = serverSocket.getLocalPort();
-            CountDownLatch latch = new CountDownLatch(1);
-            RequestLooper looper = new RequestLooper(serverSocket,this,latch);
-            new Thread(looper).start();
-            latch.await();
-        }catch (Exception e){
-            throw new RuntimeException(e);
-        }
+    public int getTimeout() {
+        return timeout;
     }
-
-    @Override
-    public void clear() {
-
-    }
-
-    @Override
-    public void onStop() {
-
-    }
-
 
     public Set<RequestFactory> getRequestFactories() {
         return requestFactories;
@@ -116,10 +191,6 @@ public class CacheProxy implements AndroidLifecycleListener {
 
     public Set<SourceFactory> getSourceFactories() {
         return sourceFactories;
-    }
-
-    public Context getContext() {
-        return context;
     }
 
     public ExecutorService getCacheExecutor() {
@@ -139,40 +210,50 @@ public class CacheProxy implements AndroidLifecycleListener {
         this.cache = cache;
     }
 
-    class Builder{
-        private Context context;
-        private ExecutorService executor;
-        private FileStrategy fileStrategy;
+    public LifecycleScopeProvide getLifecycleScopeProvide() {
+        return lifecycleScopeProvide;
+    }
 
-        public FileStrategy getFileStrategy() {
-            return fileStrategy;
+
+
+    class Builder{
+
+        private CacheProxy proxy;
+
+
+        public Builder(Context context) {
+            proxy = new CacheProxy(context,true);
         }
 
-        public Builder FileStrategy(FileStrategy fileStrategy) {
-            this.fileStrategy = fileStrategy;
+        public Builder requestFactory(RequestFactory factory){
+            proxy.requestFactories.add(factory);
             return this;
         }
 
-        public Builder(Context context) {
-            this.context = context;
+        public Builder sourceFactory(SourceFactory factory){
+            proxy.sourceFactories.add(factory);
+            return this;
         }
 
-        public Context getContext() {
-            return context;
+        public Builder threadSize(int size){
+            proxy.setThreadSize(size);
+            return this;
         }
 
-
-        public ExecutorService getExecutor() {
-            return executor;
+        public Builder lifecycleScopeProvide(LifecycleScopeProvide provide){
+            proxy.setLifecycleScopeProvide(provide);
+            return this;
         }
 
-        public Builder setExecutor(ExecutorService executor) {
-            this.executor = executor;
+        public Builder setTimeout(int timeout){
+            proxy.setTimeout(timeout);
             return this;
         }
 
         public CacheProxy build(){
-            return new CacheProxy(this);
+            proxy.initial();
+            proxy.start();
+            return proxy;
         }
     }
 

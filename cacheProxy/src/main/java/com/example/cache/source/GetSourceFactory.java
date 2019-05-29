@@ -4,9 +4,14 @@ public class GetSourceFactory implements SourceFactory {
 
     @Override
     public Source from(String type, String url, Object o) {
-        if (!("Get".equals(type))){
+        if (!("GET".equalsIgnoreCase(type))){
             return null;
         }
-        return new GetSource(url);
+        GetSource source = GetSource.acquire();
+        if (source == null){
+            return new GetSource(url);
+        }
+        source.init(url);
+        return source;
     }
 }

@@ -12,7 +12,7 @@ public class SimpleFileStrategy implements FileStrategy {
 
     public SimpleFileStrategy(Context context,String base) {
         if (isExternalCanUser()){
-            parentPath = Environment.getExternalStorageDirectory()+"/"+base+"/";
+            parentPath = context.getExternalCacheDir().getAbsolutePath() + "/"+base+"/";
         }else {
             if (context != null) {
                 parentPath = context.getExternalCacheDir().getAbsolutePath() + "/"+base+"/";
@@ -22,13 +22,17 @@ public class SimpleFileStrategy implements FileStrategy {
         }
     }
 
+    @Override
+    public String parentPath() {
+        return parentPath;
+    }
 
     @Override
     public File get(String url) {
         int lastIndex  = url.lastIndexOf("?");
         int begin = url.lastIndexOf("/");
         String fileName = url.substring(begin == -1?0:begin,lastIndex==-1?url.length():lastIndex);
-        File file = new File(parentPath,fileName);
+        File file = new File(parentPath,fileName+".txt");
         checkFile(file);
         return file;
     }
@@ -39,7 +43,7 @@ public class SimpleFileStrategy implements FileStrategy {
             try {
                 file.createNewFile();
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new RuntimeException("can not create file: "+file);
             }
         }
     }

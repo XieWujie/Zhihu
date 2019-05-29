@@ -1,6 +1,10 @@
 package com.example.cache.source;
 
 import android.os.Build;
+import com.example.cache.util.CacheUtil;
+import com.example.cache.util.LOG;
+import com.example.cache.util.Pools;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -11,11 +15,17 @@ public class GetSource implements Source {
     private String url;
     private HttpURLConnection connection;
     private InputStream inputStream;
+    private static final int timeout = 4*1000;
+    private static Pools.Pool<GetSource> pool = new Pools.SynchronizedPool<>(10);
+
 
     public GetSource(String url) {
-        this.url = url;
+       init(url);
     }
 
+    public void init(String url){
+        this.url = url;
+    }
     @Override
     public String realUrl() {
         return url;
@@ -23,15 +33,21 @@ public class GetSource implements Source {
 
     @Override
     public HttpURLConnection openConnection() throws IOException {
+        if (inputStream != null){
+            CacheUtil.close(inputStream);
+        }
         if (connection != null){
             connection.disconnect();
         }
         connection = (HttpURLConnection) (new URL(url).openConnection());
+        connection.setConnectTimeout(timeout);
+        connection.setReadTimeout(timeout);
         return connection;
     }
 
     private InputStream getBlockStream(HttpURLConnection connection, long start)throws IOException{
         connection.setRequestProperty("Range", "bytes=" + start + "-");
+        LOG.debug("offset"+start);
         return connection.getInputStream();
     }
 
@@ -41,7 +57,7 @@ public class GetSource implements Source {
     }
 
     @Override
-    public void open(long offset) throws IOException{
+    public HttpURLConnection open(long offset) throws IOException{
         if (offset>0 && acceptRange()){
             connection = openConnection();
             inputStream = getBlockStream(connection,offset);
@@ -51,18 +67,24 @@ public class GetSource implements Source {
             }
             inputStream = connection.getInputStream();
         }
+        return connection;
     }
 
     @Override
     public void close()throws IOException {
-        if (connection != null){
-            connection.disconnect();
-            connection = null;
-        }
         if (inputStream != null){
             inputStream.close();
             inputStream = null;
         }
+        if (connection != null){
+            connection.disconnect();
+            connection = null;
+        }
+        pool.release(this);
+    }
+
+    public static GetSource acquire(){
+        return pool.acquire();
     }
 
     @Override
@@ -77,9 +99,6 @@ public class GetSource implements Source {
     public long contentLength()throws IOException {
         if (connection == null){
             connection = openConnection();
-        }
-        if (Build.VERSION.SDK_INT>24) {
-            return connection.getContentLengthLong();
         }
         return connection.getContentLength();
     }

@@ -1,11 +1,16 @@
 package com.example.cache.request;
 
-public interface Request extends Runnable {
+import com.example.cache.Release;
+import com.example.cache.lifecycle.LifecycleListener;
 
-    void clear();
+public interface Request extends Runnable , LifecycleListener, Release {
+
 
     String type();
 
     String realUrl();
 
+    void registerListener(RequestListener listener);
 }
+
+

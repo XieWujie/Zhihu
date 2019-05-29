@@ -1,8 +1,10 @@
 package com.example.cache.cache;
 
+import java.io.Closeable;
+import java.io.File;
 import java.io.IOException;
 
-public interface Cache {
+public interface Cache extends Closeable {
 
     int read(byte[] b)throws IOException;
     void write(byte[] b,int length)throws IOException;
@@ -10,6 +12,7 @@ public interface Cache {
     void seekWrite(long offset) throws IOException;
     long available()throws IOException;
     void isSourceFinish(boolean isFinish);
+    void clearContent();
     boolean isSourceFinish();
-
+    File source();
 }

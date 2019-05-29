@@ -6,6 +6,7 @@ import com.example.administrator.zhihu.data.Api
 import com.example.administrator.zhihu.data.NetworkState
 import com.example.administrator.zhihu.data.NewsResponse
 import com.example.administrator.zhihu.data.Story
+import com.example.cache.util.LOG
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
@@ -44,6 +45,7 @@ class NewsPageSource(
             initialLoad.postValue(NetworkState.LOADED)
             callback.onResult(s, null, 0)
         }catch (e:IOException){
+            e.printStackTrace();
             retry = {
                 loadInitial(params,callback)
             }
